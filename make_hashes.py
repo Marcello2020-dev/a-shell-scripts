@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+make_hashes.py — Generate SHA-256 checksum files for all PDFs in the CURRENT folder.
+
+Output:
+- For each PDF: <name>.sha256.txt  (one line: hex digest)
+- README_SHA256.md                 (bilingual overview table)
+
+Run it INSIDE the folder that contains the PDFs.
+"""
+
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -15,41 +26,48 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def fmt_bytes(n: int) -> str:
+    return str(n)
+
+
+def fmt_mtime(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def main() -> None:
-    # Wichtig: im *aktuellen Ordner* arbeiten (da, wo du via pickFolder gelandet bist)
     here = Path.cwd()
 
+    # Robust PDF detection (case-insensitive)
     pdfs = sorted(
-        [p for p in list(here.glob("*.pdf")) + list(here.glob("*.PDF")) if p.is_file()],
-        key=lambda p: p.name.lower(),
+        [p for p in here.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"],
+        key=lambda p: p.name.casefold(),
     )
 
     rows = []
+    expected_hash_files = []
+
     for p in pdfs:
         digest = sha256_file(p)
-
-        # pro PDF: file.pdf -> file.sha256.txt
         out = p.with_suffix(".sha256.txt")
         out.write_text(digest + "\n", encoding="utf-8")
+        expected_hash_files.append(out)
 
         st = p.stat()
-        size = st.st_size
-        mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        rows.append((p.name, digest, out.name, size, mtime))
+        rows.append((p.name, digest, out.name, st.st_size, fmt_mtime(st.st_mtime)))
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    folder = str(here)
+    folder = str(here.resolve())
 
+    # Build README
     lines = []
     lines.append("# SHA-256 Checksums (PDF)\n\n")
     lines.append(f"Generated: **{now}**  \n")
     lines.append(f"Folder: `{folder}`\n\n")
 
-    # Deutsch
     lines.append("## Deutsch\n\n")
     lines.append(
-        "Dieses Dokument wurde automatisch erzeugt. Es listet alle **PDF-Dateien im aktuellen Ordner** auf "
-        "und enthält deren **SHA-256 Prüfsummen**.\n\n"
+        "Dieses Dokument wurde automatisch erzeugt. Es listet alle **PDF-Dateien im aktuellen Ordner** "
+        "auf und enthält deren **SHA-256 Prüfsummen**.\n\n"
     )
     lines.append("### Dateien\n\n")
     if rows:
@@ -66,7 +84,6 @@ def main() -> None:
     lines.append('python3 "$HOME/Documents/bin/a-shell-scripts.git/verify_hashes.py"\n')
     lines.append("```\n\n")
 
-    # English
     lines.append("## English\n\n")
     lines.append(
         "This file was generated automatically. It lists all **PDF files in the current folder** "
@@ -87,8 +104,40 @@ def main() -> None:
     lines.append('python3 "$HOME/Documents/bin/a-shell-scripts.git/verify_hashes.py"\n')
     lines.append("```\n")
 
-    Path(README_NAME).write_text("".join(lines), encoding="utf-8")
-    print(f"OK: {len(rows)} PDFs → {len(rows)} .sha256.txt files + {README_NAME}")
+    readme_path = here / README_NAME
+    readme_path.write_text("".join(lines), encoding="utf-8")
+
+    # --- Built-in “did we actually write files?” verification ---
+    missing = []
+    written = []
+
+    for hf in expected_hash_files:
+        if hf.exists():
+            st = hf.stat()
+            written.append((hf.name, st.st_size, fmt_mtime(st.st_mtime)))
+        else:
+            missing.append(hf.name)
+
+    if readme_path.exists():
+        st = readme_path.stat()
+        written.append((readme_path.name, st.st_size, fmt_mtime(st.st_mtime)))
+    else:
+        missing.append(readme_path.name)
+
+    print(f"CWD: {here}")
+    print(f"PDFs found: {len(pdfs)}")
+    print(f"OK: {len(expected_hash_files)} expected .sha256.txt + {README_NAME}")
+
+    if written:
+        print("\nWritten files:")
+        for name, size, mtime in sorted(written, key=lambda x: x[0].casefold()):
+            print(f"  {name}   {fmt_bytes(size)} bytes   {mtime}")
+
+    if missing:
+        print("\nERROR: Missing output files:")
+        for name in missing:
+            print(f"  {name}")
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
